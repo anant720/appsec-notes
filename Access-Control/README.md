@@ -15,14 +15,18 @@ This document outlines my offensive methodology for discovering these flaws and 
 
 Building multi-tenant systems requires absolute certainty in tenant isolation. Here is how I approach Access Control in my repositories:
 
-### 1. [GigFlow](https://github.com/anant720/GigFlow) (Freelance Marketplace)
+### 1. Sentinel Security Platform (Multi-Tenant SOC)
+- **Tenant Isolation & Zero Trust:** In a multi-tenant SOC telemetry environment, an IDOR means a catastrophic cross-tenant data breach. I architected Sentinel with strict RBAC middleware. Every API endpoint extracts the user's UUID and roles directly from the validated JWT, enforcing absolute tenant isolation on every single PostgreSQL query to mitigate Broken Access Control.
+
+### 2. [GigFlow](https://github.com/anant720/GigFlow) (Freelance Marketplace)
+- **Multi-Tenant SOC Isolation & RBAC Middleware:** Sentinel Security Platform
 - **Role-Based Access Control (RBAC):** GigFlow handles distinctly different user roles (Clients, Freelancers, Admins). I architected the backend to ensure vertical privilege separation—so a Freelancer can never access Client billing endpoints or approve their own proposals.
 - **Object-Level Security:** When a client accesses a private gig proposal, the Express backend explicitly verifies that the requested proposal ID belongs to the authenticated client's `userId`.
 
-### 2. [Peblo-AI-Notes](https://github.com/anant720/Peblo-AI-Notes) (AI Workspace)
+### 3. [Peblo-AI-Notes](https://github.com/anant720/Peblo-AI-Notes) (AI Workspace)
 - **Workspace Isolation:** Because users store sensitive markdown notes and AI action items, horizontal privilege escalation (IDOR) would be catastrophic. I leveraged **NextAuth** to securely extract the user's session token and enforce that every API query filters strictly by the authenticated `userId`. User A literally cannot query User B's notes.
 
-### 3. [pass-storage](https://github.com/anant720/pass-storage) (Credential Vault)
+### 4. [pass-storage](https://github.com/anant720/pass-storage) (Credential Vault)
 - **Strict Data Ownership:** In a password management context, relying on frontend UI hiding is unacceptable. Every retrieval query structurally mandates an ownership check at the database level, ensuring cross-tenant data leaks are mathematically impossible within the query structure.
 
 ---
@@ -73,6 +77,7 @@ When designing authorization systems, I enforce the following:
 
 ## 🔗 References & My Repository Implementations
 - **Workspace Isolation & NextAuth AuthZ:** [Peblo-AI-Notes Source Code](https://github.com/anant720/Peblo-AI-Notes)
+- **Multi-Tenant SOC Isolation & RBAC Middleware:** Sentinel Security Platform
 - **Role-Based Access Control (RBAC):** [GigFlow Source Code](https://github.com/anant720/GigFlow)
 - **Strict Data Ownership & Vault Security:** [pass-storage Source Code](https://github.com/anant720/pass-storage)
 - [OWASP Top 10: Broken Access Control](https://owasp.org/Top10/A01_2021-Broken_Access_Control/)
