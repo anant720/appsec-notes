@@ -15,16 +15,16 @@ This document serves as my personal engineering notebook, detailing how I analyz
 
 Security is not theoretical. Here is how I apply API security principles across my production-grade applications:
 
-### 1. Peblo-AI-Notes (Next.js, NextAuth, Upstash, Gemini 2.0)
+### 1. [Peblo-AI-Notes](https://github.com/anant720/Peblo-AI-Notes) (Next.js, NextAuth, Upstash, Gemini 2.0)
 - **Rate Limiting:** APIs powering AI models (like Gemini) are highly susceptible to cost-exhaustion (Denial of Wallet) attacks. I integrated **Upstash Redis** to enforce strict sliding-window rate limits on the AI generation endpoints.
 - **Authentication:** Utilized **NextAuth** to securely manage stateless sessions, ensuring that action-item generation endpoints cryptographically verify the user's identity before processing requests.
 
-### 2. GigFlow (React, Node.js, Express, MongoDB, Razorpay)
+### 2. [GigFlow](https://github.com/anant720/GigFlow) (React, Node.js, Express, MongoDB, Razorpay)
 - **Payment Security:** Integrating Razorpay required exposing public webhook endpoints. To prevent attackers from spoofing "payment successful" events, I implemented strict **HMAC-SHA256 signature verification** on the webhook payloads.
 - **Input Validation:** Enforced strict schema validation on the Express API routes to prevent Mass Assignment attacks when freelancers update their portfolios or clients post new gigs.
 
-### 3. Sentinel Security Platform & AI Guardian
-- **Zero Trust Routing:** Designed the API layer to drop unexpected JSON keys silently, preventing NoSQL injection and prototype pollution before it hits the database engine.
+### 3. [AI-GUARDIAN](https://github.com/anant720/AI-GUARDIAN) & Sentinel Security Platform
+- **Zero Trust Routing:** Designed the API layer to drop unexpected JSON keys silently, preventing NoSQL injection and prototype pollution before it hits the database engine in my AI-powered scam detection systems.
 
 ---
 
@@ -33,7 +33,7 @@ Security is not theoretical. Here is how I apply API security principles across 
 ### 1. Broken Object Level Authorization (BOLA / IDOR)
 **The Flaw:** The API fails to validate if the authenticated user has the explicit right to access the specific requested resource ID.
 **Attacker Mindset:** I look for sequential IDs (`/api/gigs/1055`) and simply increment them (`/api/gigs/1056`) using a standard user's session token.
-**Engineering Defense (GigFlow context):**
+**Engineering Defense ([GigFlow implementation](https://github.com/anant720/GigFlow)):**
 - Never trust the client-provided ID alone.
 - *Insecure:* `Gig.findById(req.params.id)`
 - *Secure:* `Gig.findOne({ _id: req.params.id, clientId: req.user.id })`
@@ -64,7 +64,7 @@ await User.findByIdAndUpdate(req.user.id, safeData);
 
 ### 4. API Exhaustion & Rate Limiting Failures
 **The Flaw:** APIs lacking rate limits can be brute-forced for passwords, OTPs, or used to rack up massive cloud bills (Denial of Wallet).
-**Engineering Defense (Peblo-AI-Notes context):**
+**Engineering Defense ([Peblo-AI-Notes implementation](https://github.com/anant720/Peblo-AI-Notes)):**
 - Standard IP-based rate limiting is insufficient due to distributed botnets.
 - Implement token-bucket or sliding-window rate limiting in a fast, in-memory store like **Upstash Redis**.
 - Limit by `IP Address` for unauthenticated routes (login/signup), and limit by `User ID` for authenticated routes (AI generation).
@@ -72,7 +72,7 @@ await User.findByIdAndUpdate(req.user.id, safeData);
 ### 5. Webhook & Third-Party API Spoofing
 **The Flaw:** Applications rely on external APIs (like Razorpay/Stripe) to confirm state changes (e.g., successful payment), but fail to verify the origin of the webhook.
 **Attacker Mindset:** If I find the webhook endpoint (`/api/payments/webhook`), I will send a forged POST request claiming my transaction was successful.
-**Engineering Defense (GigFlow context):**
+**Engineering Defense ([GigFlow implementation](https://github.com/anant720/GigFlow)):**
 - Webhooks must verify the cryptographic signature sent in the headers (e.g., `X-Razorpay-Signature`).
 ```javascript
 // Validating Razorpay Signature
@@ -110,7 +110,10 @@ When designing a new API, I adhere to these core principles:
 
 ---
 
-## 🔗 References
+## 🔗 References & My Repository Implementations
+- **My Rate Limiting & Auth implementation:** [Peblo-AI-Notes Source Code](https://github.com/anant720/Peblo-AI-Notes)
+- **My Payment Webhook Security & Schema Validation:** [GigFlow Source Code](https://github.com/anant720/GigFlow)
+- **My AI Sandbox Analysis:** [AI-GUARDIAN Source Code](https://github.com/anant720/AI-GUARDIAN)
 - [OWASP API Security Top 10](https://owasp.org/API-Security/editions/2023/en/0x11-t10/)
 - [Upstash Redis Rate Limiting](https://upstash.com/docs/redis/overall/getstarted)
 - [NextAuth Security Documentation](https://next-auth.js.org/configuration/options#security)
