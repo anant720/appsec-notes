@@ -1,51 +1,117 @@
-# API Security & Architecture
+# 🛡️ API Security Architecture & Research Notes
 
-## Overview
-Modern web applications are heavily decentralized, relying on REST, GraphQL, and gRPC APIs. Securing these interfaces requires strict input validation, robust authentication, and meticulous control over data exposure, as APIs often bypass traditional web application firewalls.
+*Author: Anant | GitHub: [anant720](https://github.com/anant720)*
 
-## Core Concepts: Mass Assignment & Excessive Data Exposure
-- **Mass Assignment:** When frameworks automatically bind incoming HTTP parameters to database objects. Attackers inject unauthorized fields (e.g., `"is_admin": true`).
-- **Excessive Data Exposure:** When APIs return full database records, relying on the frontend UI to filter sensitive data.
+---
 
-## Real-World Usage
-- **Where it appears:** Frameworks like Express, Spring Boot, or Ruby on Rails that offer "magic" data binding features.
-- **Commonly affected systems:** Mobile backends and modern SPAs (React/Vue) where APIs are designed to be overly generic to support multiple views.
-- **Architectural Causes:** Lack of strict Data Transfer Objects (DTOs) and failing to define explicit data serialization contracts between the backend and frontend.
-- **Why developers introduce it:** Prioritizing rapid feature development by reusing the same database query for multiple different UI views, over-fetching data.
+## 📌 Overview
+In modern decentralized architectures, APIs form the connective tissue between frontend clients (React/Vite), backend services (Node.js/Express), and third-party integrations (Razorpay, Google Gemini). Because APIs bypass traditional web application firewalls and directly expose backend business logic, they are the primary target for attackers.
 
-## Where I Used / Observed This Concept
-- **Sentinel Security Platform:** Built the API layer utilizing Node.js and Fastify. I heavily utilized JSON Schema validation to explicitly reject any undocumented parameters, preventing mass assignment.
-- **SecurePass Analyzer:** Designed the API to return strictly the entropy score and boolean exposure flags, never echoing back the user's input password in the response to prevent excessive data exposure and caching leaks.
+This document serves as my personal engineering notebook, detailing how I analyze API vulnerabilities from an offensive perspective and engineer resilient, secure systems to defend against them.
 
-## Attacker Mindset
-- **What they look for:** API responses containing fields that aren't rendered in the UI (e.g., finding a `password_hash` or `role` in a profile response via Burp Suite).
-- **Exploitation Goals:** Elevate privileges, modify internal accounting balances, or exfiltrate PII.
-- **Evasion Tactics:** Utilizing GraphQL introspection to map hidden endpoints, or appending old API versions (e.g., `/api/v1/profile`) to bypass modern WAF rules (Shadow APIs).
+---
 
-## Engineering Perspective
-- **Defensive Architecture:** Enforce strict request validation at the edge. Implement response serialization to guarantee that sensitive internal fields are stripped before JSON serialization occurs.
-- **Secure Coding:** Never blindly pass `req.body` into an ORM update function (e.g., `User.update(req.body)`).
+## 🏗️ Real-World Engineering Context (My Projects)
 
-## Security Engineering Notes
-- **API Gateway Hardening:** Terminate SSL, enforce global rate limits, and validate JWT structures at the API Gateway level before traffic reaches microservices.
-- **Rate Limiting Strategies:** Implement sliding window rate limits backed by Redis, keyed by IP and User-ID, to mitigate credential stuffing and enumeration.
+Security is not theoretical. Here is how I apply API security principles across my production-grade applications:
 
-## Detection Opportunities
-- **Log Indicators:** API requests containing undocumented JSON keys, or requests targeting deprecated API versions (`/v1/`, `/beta/`).
-- **Telemetry:** Spikes in 400 Bad Request errors often indicate automated parameter fuzzing.
+### 1. Peblo-AI-Notes (Next.js, NextAuth, Upstash, Gemini 2.0)
+- **Rate Limiting:** APIs powering AI models (like Gemini) are highly susceptible to cost-exhaustion (Denial of Wallet) attacks. I integrated **Upstash Redis** to enforce strict sliding-window rate limits on the AI generation endpoints.
+- **Authentication:** Utilized **NextAuth** to securely manage stateless sessions, ensuring that action-item generation endpoints cryptographically verify the user's identity before processing requests.
 
-## Related Vulnerabilities
-- **Business Logic Flaws:** Mass assignment is essentially a business logic bypass.
-- **Insecure Direct Object Reference (IDOR / BOLA):** Often chained with API flaws.
+### 2. GigFlow (React, Node.js, Express, MongoDB, Razorpay)
+- **Payment Security:** Integrating Razorpay required exposing public webhook endpoints. To prevent attackers from spoofing "payment successful" events, I implemented strict **HMAC-SHA256 signature verification** on the webhook payloads.
+- **Input Validation:** Enforced strict schema validation on the Express API routes to prevent Mass Assignment attacks when freelancers update their portfolios or clients post new gigs.
 
-## Interview Insights
-- **Architecture Level Reasoning:** Be prepared to explain how to secure a public-facing API. Discuss rate limiting, WAFs, API gateways, strict schema validation, DTOs, and short-lived stateless authentication.
-- **Tradeoff Analysis:** Discussing the flexibility of GraphQL vs the strictness and predictability of REST APIs.
+### 3. Sentinel Security Platform & AI Guardian
+- **Zero Trust Routing:** Designed the API layer to drop unexpected JSON keys silently, preventing NoSQL injection and prototype pollution before it hits the database engine.
 
-## Project Connections
-- **Sentinel Security Platform:** Employs Fastify's highly performant JSON schema validation to act as an internal firewall, strictly defining what data enters and exits the API boundaries.
+---
 
-## References
-- [OWASP API Security Project](https://owasp.org/www-project-api-security/)
-- [MDN: HTTP CORS](https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS)
-- [REST API Security Essentials](https://restfulapi.net/security-essentials/)
+## 🚨 Core Vulnerabilities & Defensive Strategies
+
+### 1. Broken Object Level Authorization (BOLA / IDOR)
+**The Flaw:** The API fails to validate if the authenticated user has the explicit right to access the specific requested resource ID.
+**Attacker Mindset:** I look for sequential IDs (`/api/gigs/1055`) and simply increment them (`/api/gigs/1056`) using a standard user's session token.
+**Engineering Defense (GigFlow context):**
+- Never trust the client-provided ID alone.
+- *Insecure:* `Gig.findById(req.params.id)`
+- *Secure:* `Gig.findOne({ _id: req.params.id, clientId: req.user.id })`
+- Use cryptographically random UUIDv4s to mitigate enumeration.
+
+### 2. Mass Assignment (Auto-Binding)
+**The Flaw:** Modern frameworks (like Express or Spring) easily bind incoming JSON payloads directly to database objects.
+**Attacker Mindset:** If I intercept a profile update request (`PUT /api/user/profile`), I will append hidden fields like `{"role": "admin", "wallet_balance": 9999, "isVerified": true}`. If the backend uses a generic update function, it will save these fields.
+**Engineering Defense:**
+- Implement strict Data Transfer Objects (DTOs).
+- Use validation libraries (like Zod or Joi) to strip unknown keys.
+```javascript
+// GigFlow Safe Update Pattern
+const safeData = {
+    bio: req.body.bio,
+    skills: req.body.skills
+};
+// 'role' and 'balance' are implicitly ignored
+await User.findByIdAndUpdate(req.user.id, safeData);
+```
+
+### 3. Excessive Data Exposure
+**The Flaw:** The API returns the entire database row, relying on the frontend (React/Vite) to filter what the user sees.
+**Attacker Mindset:** I ignore the web UI and intercept the raw JSON response in Burp Suite. I look for exposed password hashes, reset tokens, or internal notes (e.g., finding hidden admin comments on a GigFlow proposal).
+**Engineering Defense:**
+- Implement strict response serialization.
+- GraphQL APIs are particularly vulnerable to this if field-level authorization isn't strictly defined.
+
+### 4. API Exhaustion & Rate Limiting Failures
+**The Flaw:** APIs lacking rate limits can be brute-forced for passwords, OTPs, or used to rack up massive cloud bills (Denial of Wallet).
+**Engineering Defense (Peblo-AI-Notes context):**
+- Standard IP-based rate limiting is insufficient due to distributed botnets.
+- Implement token-bucket or sliding-window rate limiting in a fast, in-memory store like **Upstash Redis**.
+- Limit by `IP Address` for unauthenticated routes (login/signup), and limit by `User ID` for authenticated routes (AI generation).
+
+### 5. Webhook & Third-Party API Spoofing
+**The Flaw:** Applications rely on external APIs (like Razorpay/Stripe) to confirm state changes (e.g., successful payment), but fail to verify the origin of the webhook.
+**Attacker Mindset:** If I find the webhook endpoint (`/api/payments/webhook`), I will send a forged POST request claiming my transaction was successful.
+**Engineering Defense (GigFlow context):**
+- Webhooks must verify the cryptographic signature sent in the headers (e.g., `X-Razorpay-Signature`).
+```javascript
+// Validating Razorpay Signature
+const crypto = require('crypto');
+const expectedSignature = crypto.createHmac('sha256', process.env.RAZORPAY_WEBHOOK_SECRET)
+                                .update(JSON.stringify(req.body))
+                                .digest('hex');
+
+if (req.headers['x-razorpay-signature'] !== expectedSignature) {
+    throw new Error('Invalid signature. Potential spoofing attack.');
+}
+```
+
+---
+
+## 🛠️ Security Engineering Architecture
+
+When designing a new API, I adhere to these core principles:
+1. **API Gateway Termination:** Terminate SSL, enforce global rate limits, and validate the structural integrity of JWTs at the edge before traffic ever touches the Node.js backend.
+2. **Fail Closed:** If an authorization check encounters an error (e.g., Redis is down, DB connection fails), the API must return `500 Internal Server Error` or `403 Forbidden`, never defaulting to granting access.
+3. **Stateless but Revocable:** While JWTs are stateless, I utilize Redis to maintain a blocklist of compromised or logged-out token IDs (JTI) to enable immediate session termination.
+4. **CORS Configuration:** Explicitly define `Access-Control-Allow-Origin`. Never use wildcards (`*`) on authenticated endpoints.
+
+---
+
+## 🎤 Interview Insights
+
+**Q: How do you secure a public-facing API that handles payments?**
+*A:* Security must be layered (Defense in Depth). 
+1. **Edge Layer:** WAF to block common injection payloads and Upstash Redis rate limiting to prevent brute force.
+2. **Auth Layer:** Secure, short-lived JWTs stored in HttpOnly cookies (to prevent XSS exfiltration).
+3. **Application Layer:** Strict Zod/Joi schema validation to prevent Mass Assignment and NoSQL injection.
+4. **Logic Layer:** Verifying authorization (IDOR checks) for every database interaction.
+5. **Integration Layer:** Cryptographically verifying all incoming webhooks (e.g., Razorpay HMAC signatures) to prevent state spoofing.
+
+---
+
+## 🔗 References
+- [OWASP API Security Top 10](https://owasp.org/API-Security/editions/2023/en/0x11-t10/)
+- [Upstash Redis Rate Limiting](https://upstash.com/docs/redis/overall/getstarted)
+- [NextAuth Security Documentation](https://next-auth.js.org/configuration/options#security)
+- [Razorpay Webhook Verification](https://razorpay.com/docs/webhooks/validate-test/)
