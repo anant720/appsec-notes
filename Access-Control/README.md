@@ -15,11 +15,11 @@ This document outlines my offensive methodology for discovering these flaws and 
 
 Building multi-tenant systems requires absolute certainty in tenant isolation. Here is how I approach Access Control in my repositories:
 
-### 1. Sentinel Security Platform (Multi-Tenant SOC)
+### 1. [Sentinel Security Platform](https://github.com/anant720/Sentinel) (Multi-Tenant SOC)
 - **Tenant Isolation & Zero Trust:** In a multi-tenant SOC telemetry environment, an IDOR means a catastrophic cross-tenant data breach. I architected Sentinel with strict RBAC middleware. Every API endpoint extracts the user's UUID and roles directly from the validated JWT, enforcing absolute tenant isolation on every single PostgreSQL query to mitigate Broken Access Control.
 
 ### 2. [GigFlow](https://github.com/anant720/GigFlow) (Freelance Marketplace)
-- **Multi-Tenant SOC Isolation & RBAC Middleware:** Sentinel Security Platform
+- **Multi-Tenant SOC Isolation & RBAC Middleware:** [Sentinel Security Platform](https://github.com/anant720/Sentinel)
 - **Role-Based Access Control (RBAC):** GigFlow handles distinctly different user roles (Clients, Freelancers, Admins). I architected the backend to ensure vertical privilege separation—so a Freelancer can never access Client billing endpoints or approve their own proposals.
 - **Object-Level Security:** When a client accesses a private gig proposal, the Express backend explicitly verifies that the requested proposal ID belongs to the authenticated client's `userId`.
 
@@ -77,7 +77,7 @@ When designing authorization systems, I enforce the following:
 
 ## 🔗 References & My Repository Implementations
 - **Workspace Isolation & NextAuth AuthZ:** [Peblo-AI-Notes Source Code](https://github.com/anant720/Peblo-AI-Notes)
-- **Multi-Tenant SOC Isolation & RBAC Middleware:** Sentinel Security Platform
+- **Multi-Tenant SOC Isolation & RBAC Middleware:** [Sentinel Security Platform](https://github.com/anant720/Sentinel)
 - **Role-Based Access Control (RBAC):** [GigFlow Source Code](https://github.com/anant720/GigFlow)
 - **Strict Data Ownership & Vault Security:** [pass-storage Source Code](https://github.com/anant720/pass-storage)
 - [OWASP Top 10: Broken Access Control](https://owasp.org/Top10/A01_2021-Broken_Access_Control/)
