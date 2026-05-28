@@ -3,28 +3,45 @@
 ## Overview
 Access control vulnerabilities, primarily Insecure Direct Object References (IDOR) and Broken Access Control (BAC), occur when an application fails to cryptographically verify or enforce authorization checks on requested resources. Attackers exploit this by manipulating references (like database IDs, filenames, or usernames) to access data belonging to other users.
 
-## Vulnerability Classifications
+## Real-World Usage
+- **Where it appears:** RESTful APIs, document management systems, user profile settings, and payment portals.
+- **Commonly affected systems:** Multi-tenant SaaS applications where tenant boundaries are improperly enforced at the database query level.
+- **Architectural Causes:** Trusting the client to not modify API parameters, or implementing authorization checks solely in the frontend UI while leaving the backend API exposed.
+- **Why developers introduce it:** Assuming that if a user cannot *see* the UI button for another user's invoice, they won't manually craft the API request to fetch it.
 
-### 1. Horizontal Privilege Escalation
-An attacker accesses resources belonging to a user with the same privilege level.
-- **Example:** User A (`user_id=101`) modifies an API request to `GET /api/invoices?user_id=102` and views User B's invoices.
+## Where I Used / Observed This Concept
+- **Sentinel Security Platform:** Engineered a multi-tenant SOC environment where IDORs would mean a catastrophic cross-tenant data breach. Implemented RBAC middleware to strictly enforce boundaries.
+- **CTF Exploit Chains:** Escalated privileges horizontally by iterating sequential IDs on a user profile endpoint after bypassing JWT authentication.
 
-### 2. Vertical Privilege Escalation
-A standard user accesses administrative or higher-privileged functions.
-- **Example:** A standard user navigates directly to `/admin/dashboard` or modifies a POST payload during registration to include `"role": "admin"`.
+## Attacker Mindset
+- **What they look for:** Predictable, sequential identifiers (e.g., `user_id=1055`) in URLs, bodies, or headers.
+- **Exploitation Goals:** Unauthorized data access (horizontal escalation) or administrative takeover (vertical escalation).
+- **Evasion Tactics:** Method substitution (changing GET to POST), parameter pollution (sending two `user_id` parameters to bypass the check but exploit the query).
 
-### 3. Context-Dependent Access Control
-Flaws in multi-tenant architectures where users might be admins in "Tenant A" but only standard users in "Tenant B", and the application fails to validate the context of the request.
+## Engineering Perspective
+- **Defensive Architecture:** Authorization must be enforced at the data-access layer. Before returning a record, the backend must verify: `SELECT * FROM data WHERE id = $1 AND owner_id = $2`.
+- **Secure Coding:** Replace easily guessable sequential IDs with cryptographically secure UUIDv4s. While UUIDs do not "fix" IDOR (it becomes an information disclosure issue), they prevent mass automated enumeration.
 
-## Methodology for Discovering IDORs
-1. **Extensive Mapping:** Identify all endpoints that consume identifiers (in the URI path, query strings, request bodies, or custom headers).
-2. **Multi-Account Matrix Testing:** Utilize Burp Suite's "Auth Matrix" extension or manually configure two separate, low-privileged accounts (User A and User B).
-3. **Parameter Tampering:** Intercept User A's requests and swap identifiers with User B's to test horizontal escalation.
-4. **Method Substitution:** If a strict endpoint like `GET /api/users/123` is properly protected, test alternate methods like `POST`, `PUT`, `PATCH`, or `DELETE` to the same endpoint.
+## Security Engineering Notes
+- **Auth Middleware Validation:** Implement global middleware that explicitly requires an authorization definition for *every* route, failing closed if a definition is missing.
+- **Tenant Isolation:** In multi-tenant environments, inject the `tenant_id` from the secure session token directly into all database queries, ignoring any client-provided tenant data.
 
-## Engineering Insights from Sentinel Security Platform
-During the development of the **Sentinel Security Platform** (a multi-tenant SOC telemetry platform), access control was a primary architectural focus.
+## Detection Opportunities
+- **Telemetry:** Monitor API logs for users requesting a high volume of `403 Forbidden` or `404 Not Found` errors across different resource IDs (indicating an IDOR enumeration attack).
+- **SIEM Rules:** Alert on users tampering with JWT claims or session cookies.
 
-- **The Anti-Pattern:** Enforcing role checks purely at the UI layer (hiding buttons) while leaving the underlying API routes unprotected.
-- **Secure Architecture:** I implemented Role-Based Access Control (RBAC) at the middleware layer. Every API endpoint validates the user's session token, extracts the associated UUID, and explicitly queries PostgreSQL (with a Redis caching layer) to verify permissions against the requested resource.
-- **Identifier Obfuscation:** Replaced sequential integer IDs with UUIDv4 across all database schemas. While UUIDs do not inherently fix access control flaws (if leaked, the resource is still accessible), they make automated IDOR enumeration and discovery exponentially harder.
+## Related Vulnerabilities
+- **Broken Object Level Authorization (BOLA):** The modern API-centric term for IDOR.
+- **Mass Assignment:** Often combined with IDOR to modify another user's attributes.
+
+## Interview Insights
+- **Common Question:** "Does using UUIDs fix IDOR?"
+  - *Answer:* No, it mitigates enumeration. If a UUID leaks (e.g., via Referer headers or a separate info leak), the attacker can still access the resource if access controls are broken. It's security by obscurity; true access control requires identity verification at the backend.
+
+## Project Connections
+- **Sentinel Security Platform:** Uses a robust RBAC implementation. Every request extracts the user's UUID and roles from the validated JWT, enforcing strict tenant isolation on every PostgreSQL query to mitigate Broken Access Control.
+
+## References
+- [OWASP: Broken Access Control](https://owasp.org/Top10/A01_2021-Broken_Access_Control/)
+- [PortSwigger: Insecure Direct Object References](https://portswigger.net/web-security/access-control/idor)
+- [OWASP API Security Top 10: BOLA](https://owasp.org/API-Security/editions/2023/en/0x11-t10/)

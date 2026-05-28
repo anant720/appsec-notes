@@ -3,47 +3,55 @@
 ## Overview
 JWTs are the industry standard for stateless authentication. However, their security relies entirely on the integrity of the cryptographic signature. Implementation flaws in libraries, or misconfigurations in backend validation logic, frequently lead to critical authentication bypasses and vertical privilege escalation.
 
-## Vulnerability Deep Dives
+## Vulnerability Deep Dives: Alg Confusion & 'None' Alg
 
 ### 1. Algorithm Confusion (RS256 to HS256)
-- **Root Cause Analysis:** The JWT specification requires the header to dictate the signing algorithm (e.g., `alg: RS256`). When a server expects an asymmetric RS256 signature (using a public/private key pair) but the backend JWT library fails to strictly enforce the algorithm type, it will blindly trust the `alg` parameter provided in the header.
-- **The Exploit:** An attacker alters the header to specify `HS256` (a symmetric algorithm). The server, expecting RS256, uses the public key (which the attacker has obtained) for verification. Because the attacker changed the algorithm to HS256, the verification function treats the public key string as the HMAC symmetric secret. Since the attacker possesses this string, they can forge a valid signature.
-
-**Attack Flow Diagram:**
-```text
-1. Extract Public Key (e.g., from /.well-known/jwks.json)
-      │
-2. Decode JWT Header & Payload
-      │
-3. Modify Header: {"alg": "RS256"} ──> {"alg": "HS256"}
-      │
-4. Modify Payload: {"role": "user"} ──> {"role": "admin"}
-      │
-5. Sign token using HMAC-SHA256, using the Public Key string as the secret
-      │
-6. Submit forged JWT to server. Server verifies successfully.
-```
+The JWT specification requires the header to dictate the signing algorithm (e.g., `alg: RS256`). When a server expects an asymmetric RS256 signature but fails to enforce it, an attacker can alter the header to `HS256` and sign the token using the application's public key as the HMAC secret.
 
 ### 2. The 'None' Algorithm (CVE-2015-9256)
-- **Root Cause Analysis:** The JWT standard defines a `none` algorithm for scenarios where token integrity is already guaranteed by other means. If the backend doesn't explicitly reject tokens with this algorithm, an attacker can submit an unsigned token that the server parses as valid.
-- **Payload Construction:**
-  ```json
-  // Base64Url Encoded Header
-  eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0
-  // Decodes to: {"alg": "none", "typ": "JWT"}
-  
-  // Base64Url Encoded Payload
-  eyJzdWIiOiJhZG1pbiIsImlhdCI6MTUxNjIzOTAyMn0
-  // Decodes to: {"sub": "admin", "iat": 1516239022}
-  ```
-  *Crucial syntax: The signature portion must be completely empty, resulting in a token that looks like `header.payload.` (note the trailing period).*
+If the backend doesn't explicitly reject tokens with the `none` algorithm, an attacker can submit an unsigned token that the server parses as valid.
 
-## Engineering Insights: Building Secure Auth
-When engineering the **Sentinel Security Platform**, I architected the authentication flow to mitigate these exact flaws:
-1. **Algorithm Hardcoding:** The Fastify validation middleware strictly hardcodes the expected algorithm:
-   ```javascript
-   // Secure implementation pattern
-   jwt.verify(token, publicKey, { algorithms: ['RS256'] });
-   ```
-2. **Token Lifecycle Management:** Access tokens are short-lived (15 minutes).
-3. **Storage Security:** To prevent XSS-based exfiltration, refresh tokens are stored exclusively in `HttpOnly`, `Secure`, `SameSite=Strict` cookies, never in `localStorage`.
+## Real-World Usage
+- **Where it appears:** Microservice architectures where authentication is handled by an API Gateway, but backend services also parse the JWT independently.
+- **Commonly affected systems:** Custom OAuth implementations or applications using outdated JWT libraries (pre-2016).
+- **Why developers introduce it:** Using generic `jwt.verify(token, key)` methods without explicitly passing the `algorithms: ['RS256']` options object.
+- **Architectural Causes:** Decoupling the token issuance (Auth service) from token verification (Resource service) without strict cryptographic agreements.
+
+## Where I Used / Observed This Concept
+- **Sentinel Security Platform:** Architected the multi-tenant auth system. I implemented strict RS256 algorithm enforcement in Fastify and managed key rotation.
+- **CTF Exploit Chains:** Successfully executed an RS256 to HS256 algorithm confusion attack by leveraging an SSRF to leak the public key from an internal `.well-known/jwks.json` endpoint.
+
+## Attacker Mindset
+- **What they look for:** Public key exposure (e.g., JKWS endpoints). Once obtained, attackers modify the JWT header, elevate their payload role to `"admin"`, and attempt to forge the signature.
+- **Trust Boundaries:** The core failure is trusting client-supplied metadata (the JWT header) to dictate the cryptographic verification process.
+- **Exploitation Goals:** Complete account takeover and vertical privilege escalation.
+
+## Engineering Perspective
+- **Secure System Design:** The algorithm must be decided by the server's configuration, not the token. Keys must be handled securely, ensuring symmetric verification logic is entirely separated from asymmetric logic.
+- **Defensive Architecture:** Treat the token payload as strictly untrusted until the signature is cryptographically verified against a hardcoded algorithm list.
+
+## Security Engineering Notes
+- **Token Storage:** To prevent XSS exfiltration, store short-lived JWTs in memory, and opaque refresh tokens in `HttpOnly`, `Secure`, `SameSite=Strict` cookies.
+- **Key Rotation:** Implement automated rotation for JWT signing keys using JWKS.
+- **Auth Middleware Validation:** Ensure middleware drops tokens immediately if the `kid` (Key ID) header points to an external or unauthorized domain.
+
+## Detection Opportunities
+- **Telemetry:** Monitor for JWTs submitted with `alg: none` or algorithms mismatched with the endpoint's expectation. Alert if a user attempts to change their `"role"` claim in the token payload.
+- **SIEM Detection Ideas:** Alert on anomalous `kid` headers trying to trigger directory traversal (e.g., `../../../public.key`).
+
+## Related Vulnerabilities
+- **SSRF:** Often chained to leak the public/private keys needed for JWT forgery.
+- **Insecure Direct Object Reference (IDOR):** Bypassing JWT auth leads directly to IDOR and lateral movement.
+
+## Interview Insights
+- **Discussion Point:** "Why are JWTs stateless, and how do you invalidate them?"
+  - *Answer:* They cannot be natively invalidated before expiration. You must implement a token blocklist (via Redis) or rely on short-lived access tokens paired with revocable refresh tokens.
+- **Architecture Tradeoff:** The performance benefit of stateless JWT validation versus the security control of stateful database sessions.
+
+## Project Connections
+- **Sentinel Security Platform:** Implements JWT auth with an opaque refresh token strategy, storing tokens in secure cookies and utilizing Redis for immediate session revocation, mitigating authentication abuse risks.
+
+## References
+- [RFC 7519 — JSON Web Token (JWT)](https://datatracker.ietf.org/doc/html/rfc7519)
+- [OWASP: JSON Web Token Cheat Sheet for Java](https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_for_Java_Cheat_Sheet.html)
+- [Auth0: JWT Algorithm Confusion](https://auth0.com/blog/critical-vulnerabilities-in-json-web-token-libraries/)

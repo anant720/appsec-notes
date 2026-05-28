@@ -9,79 +9,47 @@ The vulnerability manifests when three architectural conditions are met:
 2. **Permissive Origin Routing:** The origin server employs a routing mechanism that ignores unknown or trailing path extensions and resolves to the base endpoint (e.g., `/api/user/settings/nonexistent.css` maps to `/api/user/settings`).
 3. **Session-Dependent Responses:** The origin server returns private data based on the authentication state (cookies, session tokens) of the requester.
 
-## Attack Flow
+## Real-World Usage
+- **Where it appears:** Heavily utilized REST APIs sitting behind Cloudflare, Akamai, or AWS CloudFront.
+- **Commonly affected systems:** SPAs (Single Page Applications) where routing is handled on the client-side, causing the backend to permissively return the `index.html` or base JSON response regardless of the URL path.
+- **Why developers introduce it:** Misunderstanding the separation of concerns between edge caching rules (regex matching on `.js`/`.css`) and backend routing frameworks (like Express or Fastify ignoring trailing extensions).
+- **Architectural Causes:** Monolithic architectures shifting to CDN-backed microservices without updating legacy routing fallbacks.
 
-```text
-[ Attacker ]                               [ Victim ]
-    │                                          │
-    │ 1. Identifies permissive routing         │
-    │    Target: /api/v1/profile               │
-    │                                          │
-    │ 2. Crafts malicious link                 │
-    │    Link: /api/v1/profile/x.css           │
-    │                                          │
-    │ 3. Distributes link to Victim ───────────▶
-    │                                          │ 4. Victim clicks link
-    │                                          ▼
-    │                                  [ CDN / Cache Node ]
-    │                                          │
-    │                                          │ 5. Cache miss. Forwards request
-    │                                          │    (with Victim's cookies)
-    │                                          ▼
-    │                                  [ Origin Server ]
-    │                                          │ 6. Ignores '/x.css'. 
-    │                                          │    Returns Victim's private JSON
-    │                                          │
-    │                                  [ CDN / Cache Node ]
-    │                                          │ 7. Sees '.css'. Caches response!
-    │                                          │    Delivers to Victim.
-    │                                          │
-    │ 8. Requests cached file                  │
-    │    GET /api/v1/profile/x.css             │
-    ▼                                          │
-[ CDN / Cache Node ] ◀─────────────────────────┘
-    │
-    │ 9. Cache HIT! Returns Victim's
-    │    private JSON to Attacker
-    ▼
-[ Attacker ] (Data Exfiltrated)
-```
+## Where I Used / Observed This Concept
+- **PortSwigger Web Cache Deception Lab:** Exploited WCD to expose a victim's API key by manipulating path parameters and understanding cache rules via Param Miner.
+- **Sentinel Security Platform:** While developing the telemetry API, I ensured our Nginx reverse proxy explicitly ignores path extensions for dynamic `/api/*` routes, preventing caching of sensitive SOC metrics.
 
-## HTTP Request/Response Examples
+## Attacker Mindset
+- **What they look for:** Discrepancies between load balancers and backend servers. An attacker will append `.js`, `;x.css`, or `%0a.png` to sensitive endpoints and observe the `X-Cache` header for `HIT` or `MISS`.
+- **Exploitation Goals:** Steal PII, API keys, CSRF tokens, or session identifiers that are embedded in the victim's cached page.
+- **Trust Boundary Failures:** The cache implicitly trusts that if a URL ends in `.css`, the origin actually served a public CSS file, failing to validate the `Content-Type`.
 
-**Victim's Request (Induced by Attacker):**
-```http
-GET /api/v1/profile/dummy.js HTTP/1.1
-Host: target.com
-Cookie: session_id=victim_secure_token
-```
+## Engineering Perspective
+- **Defensive Architecture:** Cache configurations must factor in the `Content-Type` header returned by the origin, not rely solely on the URL extension.
+- **Secure Coding:** Origin servers must strictly enforce routing. A request for `/api/profile/x.js` should return a `404 Not Found`, not gracefully degrade to the `/api/profile` endpoint.
 
-**Origin Response (Cached by CDN):**
-```http
-HTTP/1.1 200 OK
-Content-Type: application/json
-Cache-Control: public, max-age=3600
-X-Cache: MISS
-
-{
-  "user_id": 9942,
-  "email": "victim@company.com",
-  "pii": {
-    "phone": "+1-555-0199",
-    "credit_card_last4": "4242"
-  }
-}
-```
-
-## Lab Completion Notes: PortSwigger WCD
-- **Objective:** Exploit WCD to expose a victim's API key.
-- **Methodology:**
-  1. Mapped cache behavior using Param Miner to identify cached extensions. Discovered `.js` was aggressively cached.
-  2. Tested path mapping on `/my-account`. Found that `/my-account/test.js` loaded the account dashboard while maintaining a `200 OK` status.
-  3. Delivered the payload `https://vulnerable.com/my-account/x.js` to the victim via a stored XSS/CSRF vector (or exploit server in the lab).
-  4. Quickly polled `https://vulnerable.com/my-account/x.js` from my IP to retrieve the cached dashboard containing the API key.
-
-## Defensive Engineering Insights
-- **Strict Cache Keys:** Cache configurations must factor in the `Content-Type` header returned by the origin, not rely solely on the URL extension.
+## Security Engineering Notes
 - **Cache-Control Headers:** Ensure all sensitive endpoints explicitly return `Cache-Control: private, no-store, must-revalidate`.
-- **Strict Routing Enforcement:** Origin servers should return a `404 Not Found` for invalid paths instead of gracefully degrading to a base endpoint. Frameworks like Fastify should have `ignoreTrailingSlash` configured carefully.
+- **Vary Headers:** Use `Vary: Cookie` or `Vary: Authorization` so caches separate entries based on the user session.
+- **API Gateway Hardening:** Ensure your API Gateway strictly drops requests with file extensions targeting dynamic endpoints.
+
+## Detection Opportunities
+- **Log Indicators:** Monitor origin access logs for an unusually high volume of `404` or `200` requests to sensitive API endpoints appended with static extensions (`/api/settings/styles.css`).
+- **Telemetry:** Alert on caching of endpoints explicitly defined as dynamic in the OpenAPI spec.
+
+## Related Vulnerabilities
+- **Web Cache Poisoning:** WCD steals user data (attacker accesses victim's cache); Web Cache Poisoning serves malicious payloads (victim accesses attacker's cached payload).
+- **HTTP Request Smuggling:** Often relies on similar proxy-vs-origin parsing discrepancies.
+
+## Interview Insights
+- **Common Question:** "What is the difference between Web Cache Deception and Web Cache Poisoning?"
+  - *Answer:* Deception tricks the cache into saving the *victim's* sensitive data so the attacker can read it. Poisoning tricks the cache into saving the *attacker's* malicious payload (like XSS) so it's served to victims.
+- **Architecture Tradeoff:** Balancing CDN performance (caching everything static) versus security (ensuring no dynamic data is accidentally cached).
+
+## Project Connections
+- **Sentinel Security Platform:** Uses strict `Cache-Control` headers for all dashboard routes to prevent SOC telemetry from lingering in intermediate caches.
+
+## References
+- [PortSwigger: Web Cache Deception](https://portswigger.net/web-security/web-cache-deception)
+- [MDN: HTTP Caching](https://developer.mozilla.org/en-US/docs/Web/HTTP/Caching)
+- [RFC 7234 - HTTP/1.1 Caching](https://datatracker.ietf.org/doc/html/rfc7234)
