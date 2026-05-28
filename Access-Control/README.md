@@ -1,47 +1,80 @@
-# Access Control & IDOR
+# 🛡️ Access Control, RBAC & IDOR Research Notes
 
-## Overview
-Access control vulnerabilities, primarily Insecure Direct Object References (IDOR) and Broken Access Control (BAC), occur when an application fails to cryptographically verify or enforce authorization checks on requested resources. Attackers exploit this by manipulating references (like database IDs, filenames, or usernames) to access data belonging to other users.
+*Author: Anant | GitHub: [anant720](https://github.com/anant720)*
 
-## Real-World Usage
-- **Where it appears:** RESTful APIs, document management systems, user profile settings, and payment portals.
-- **Commonly affected systems:** Multi-tenant SaaS applications where tenant boundaries are improperly enforced at the database query level.
-- **Architectural Causes:** Trusting the client to not modify API parameters, or implementing authorization checks solely in the frontend UI while leaving the backend API exposed.
-- **Why developers introduce it:** Assuming that if a user cannot *see* the UI button for another user's invoice, they won't manually craft the API request to fetch it.
+---
 
-## Where I Used / Observed This Concept
-- **Sentinel Security Platform:** Engineered a multi-tenant SOC environment where IDORs would mean a catastrophic cross-tenant data breach. Implemented RBAC middleware to strictly enforce boundaries.
-- **CTF Exploit Chains:** Escalated privileges horizontally by iterating sequential IDs on a user profile endpoint after bypassing JWT authentication.
+## 📌 Overview
+Access control vulnerabilities—primarily Insecure Direct Object References (IDOR) and Broken Access Control (BAC)—occur when an application fails to cryptographically verify or enforce authorization checks on requested resources. Unlike Injection or XSS, access control flaws are purely **business logic failures** that cannot be caught by generic Web Application Firewalls (WAFs).
 
-## Attacker Mindset
-- **What they look for:** Predictable, sequential identifiers (e.g., `user_id=1055`) in URLs, bodies, or headers.
-- **Exploitation Goals:** Unauthorized data access (horizontal escalation) or administrative takeover (vertical escalation).
-- **Evasion Tactics:** Method substitution (changing GET to POST), parameter pollution (sending two `user_id` parameters to bypass the check but exploit the query).
+This document outlines my offensive methodology for discovering these flaws and the architectural patterns I use to eliminate them in my own production applications.
 
-## Engineering Perspective
-- **Defensive Architecture:** Authorization must be enforced at the data-access layer. Before returning a record, the backend must verify: `SELECT * FROM data WHERE id = $1 AND owner_id = $2`.
-- **Secure Coding:** Replace easily guessable sequential IDs with cryptographically secure UUIDv4s. While UUIDs do not "fix" IDOR (it becomes an information disclosure issue), they prevent mass automated enumeration.
+---
 
-## Security Engineering Notes
-- **Auth Middleware Validation:** Implement global middleware that explicitly requires an authorization definition for *every* route, failing closed if a definition is missing.
-- **Tenant Isolation:** In multi-tenant environments, inject the `tenant_id` from the secure session token directly into all database queries, ignoring any client-provided tenant data.
+## 🏗️ Real-World Engineering Context (My Projects)
 
-## Detection Opportunities
-- **Telemetry:** Monitor API logs for users requesting a high volume of `403 Forbidden` or `404 Not Found` errors across different resource IDs (indicating an IDOR enumeration attack).
-- **SIEM Rules:** Alert on users tampering with JWT claims or session cookies.
+Building multi-tenant systems requires absolute certainty in tenant isolation. Here is how I approach Access Control in my repositories:
 
-## Related Vulnerabilities
-- **Broken Object Level Authorization (BOLA):** The modern API-centric term for IDOR.
-- **Mass Assignment:** Often combined with IDOR to modify another user's attributes.
+### 1. [GigFlow](https://github.com/anant720/GigFlow) (Freelance Marketplace)
+- **Role-Based Access Control (RBAC):** GigFlow handles distinctly different user roles (Clients, Freelancers, Admins). I architected the backend to ensure vertical privilege separation—so a Freelancer can never access Client billing endpoints or approve their own proposals.
+- **Object-Level Security:** When a client accesses a private gig proposal, the Express backend explicitly verifies that the requested proposal ID belongs to the authenticated client's `userId`.
 
-## Interview Insights
-- **Common Question:** "Does using UUIDs fix IDOR?"
-  - *Answer:* No, it mitigates enumeration. If a UUID leaks (e.g., via Referer headers or a separate info leak), the attacker can still access the resource if access controls are broken. It's security by obscurity; true access control requires identity verification at the backend.
+### 2. [Peblo-AI-Notes](https://github.com/anant720/Peblo-AI-Notes) (AI Workspace)
+- **Workspace Isolation:** Because users store sensitive markdown notes and AI action items, horizontal privilege escalation (IDOR) would be catastrophic. I leveraged **NextAuth** to securely extract the user's session token and enforce that every API query filters strictly by the authenticated `userId`. User A literally cannot query User B's notes.
 
-## Project Connections
-- **Sentinel Security Platform:** Uses a robust RBAC implementation. Every request extracts the user's UUID and roles from the validated JWT, enforcing strict tenant isolation on every PostgreSQL query to mitigate Broken Access Control.
+### 3. [pass-storage](https://github.com/anant720/pass-storage) (Credential Vault)
+- **Strict Data Ownership:** In a password management context, relying on frontend UI hiding is unacceptable. Every retrieval query structurally mandates an ownership check at the database level, ensuring cross-tenant data leaks are mathematically impossible within the query structure.
 
-## References
-- [OWASP: Broken Access Control](https://owasp.org/Top10/A01_2021-Broken_Access_Control/)
-- [PortSwigger: Insecure Direct Object References](https://portswigger.net/web-security/access-control/idor)
-- [OWASP API Security Top 10: BOLA](https://owasp.org/API-Security/editions/2023/en/0x11-t10/)
+---
+
+## 🚨 Vulnerability Classifications & My Defenses
+
+### 1. Horizontal Privilege Escalation (IDOR)
+**The Flaw:** An attacker accesses resources belonging to another user with the identical privilege level (User A accesses User B's data).
+**Attacker Mindset:** I map the API and look for identifiers: `GET /api/notes?id=502`. I change it to `503`. If it returns data, the access control is broken.
+**Engineering Defense ([pass-storage implementation](https://github.com/anant720/pass-storage)):**
+- Never trust the ID provided in the URL or body.
+- Always append the authenticated user's ID to the database query.
+- *SQL Example:* `SELECT * FROM passwords WHERE id = $1 AND owner_id = $2;`
+
+### 2. Vertical Privilege Escalation
+**The Flaw:** A standard user accesses administrative or higher-privileged functions.
+**Attacker Mindset:** I intercept the registration or profile update payload and inject `"role": "admin"`. Alternatively, I force-browse to `/admin/dashboard` or `DELETE /api/users/12` using a standard session token.
+**Engineering Defense ([GigFlow implementation](https://github.com/anant720/GigFlow)):**
+- Implement strict global middleware that validates the JWT payload's `role` claim against a hardcoded list of required roles for the endpoint.
+
+### 3. Missing Function Level Access Control
+**The Flaw:** UI buttons for sensitive functions (like "Delete Project") are hidden from standard users, but the API endpoint itself (`POST /api/project/delete`) remains completely unprotected.
+**Engineering Defense ([Peblo-AI-Notes implementation](https://github.com/anant720/Peblo-AI-Notes)):**
+- Security by obscurity is not security. Every server-side Next.js API route must independently verify the NextAuth session before processing any logic.
+
+---
+
+## 🛠️ Security Engineering Architecture
+
+When designing authorization systems, I enforce the following:
+
+1. **Deny by Default:** Middleware must fail closed. If a route does not have an explicit authorization definition attached to it, the application should crash or return `403 Forbidden` by default.
+2. **UUIDs over Sequential IDs:** Replace auto-incrementing integers (`user_id=105`) with cryptographically secure UUIDv4s (`user_id=f47ac10b-58cc-4372-a567-0e02b2c3d479`).
+   - *Note:* UUIDs do not "fix" IDOR (it becomes an information disclosure issue), but they completely neutralize automated mass enumeration attacks.
+3. **Decouple AuthN from AuthZ:** Authentication (AuthN - "Who are you?") is handled by JWT/NextAuth. Authorization (AuthZ - "What can you do?") must be evaluated on *every single request* inside the business logic controller.
+
+---
+
+## 🎤 Interview Insights
+
+**Q: If you use a cryptographically unguessable UUID for your API endpoints, do you still need access control checks in the backend?**
+*A:* Absolutely yes. Using a UUID only prevents *enumeration*. If a UUID leaks through a Referer header, a shared link, or a separate vulnerability (like a GraphQL introspection flaw), an attacker can access the resource if there is no backend ownership check (IDOR). Relying solely on UUIDs is security by obscurity.
+
+**Q: How do you efficiently test for IDORs in a massive API?**
+*A:* I use the **Autorize** extension in Burp Suite. I configure it with a low-privileged user's session cookie, and then I navigate the application manually using a high-privileged (Admin) account. Autorize automatically repeats all the admin's background requests using the low-privileged token and highlights which endpoints failed to block the unauthorized access.
+
+---
+
+## 🔗 References & My Repository Implementations
+- **Workspace Isolation & NextAuth AuthZ:** [Peblo-AI-Notes Source Code](https://github.com/anant720/Peblo-AI-Notes)
+- **Role-Based Access Control (RBAC):** [GigFlow Source Code](https://github.com/anant720/GigFlow)
+- **Strict Data Ownership & Vault Security:** [pass-storage Source Code](https://github.com/anant720/pass-storage)
+- [OWASP Top 10: Broken Access Control](https://owasp.org/Top10/A01_2021-Broken_Access_Control/)
+- [PortSwigger: Insecure Direct Object References (IDOR)](https://portswigger.net/web-security/access-control/idor)
+- [OWASP API Security Top 10: Broken Object Level Authorization (BOLA)](https://owasp.org/API-Security/editions/2023/en/0x11-t10/)
